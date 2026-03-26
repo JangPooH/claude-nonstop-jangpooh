@@ -27,3 +27,6 @@ Thumbs.db
 build/
 prebuilds/
 *.tgz
+
+# local logs
+.claude_log/
