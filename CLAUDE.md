@@ -185,6 +185,64 @@ The codebase runs in three distinct contexts. Changes must respect which context
 
 These processes communicate via `channel-map.json` (file-based IPC) and tmux. They do **not** share memory or direct IPC.
 
+## Account Selection Algorithm (`lib/scorer.js`)
+
+### 기존 로직 (upstream)
+
+```js
+effectiveUtilization = Math.max(sessionPercent, weeklyPercent)
+// 낮은 utilization 계정 우선 선택
+```
+
+시간(remaining) 정보를 전혀 사용하지 않아, 리셋이 임박한 계정의 잔여 용량을 낭비할 수 있었음.
+
+### 변경된 로직 (이 fork)
+
+**drain urgency 기반 선택**: "지금 사용하지 않으면 얼마나 낭비되는가"로 점수화.
+
+```
+urgency = 남은 용량 / (남은 시간% + 1)
+
+weeklyUrgency  = (100 - weeklyPercent)  / (weeklyRemainingTimePercent  + 1)
+sessionUrgency = (100 - sessionPercent) / (sessionRemainingTimePercent + 1)
+
+score = weeklyUrgency * WEEKLY_WEIGHT + sessionUrgency
+```
+
+높은 score = 더 긴급하게 소모해야 하는 계정 → 우선 선택.
+
+### WEEKLY_WEIGHT 설정 근거
+
+`lib/scorer.js` 상단의 `WEEKLY_WEIGHT` 값으로 weekly/session 상대적 중요도를 조절:
+
+```js
+// 현재값: 5
+const WEEKLY_WEIGHT = 5;
+```
+
+- **34 (시간 비율)**: 7일 ÷ 5시간 = 33.6. 수학적으로는 맞지만 session이 사실상 무의미해짐.
+- **9 (용량 비율)**: 경험적으로 full session 8~10회 ≈ weekly 전체 소모. 즉 weekly limit ≈ 9× session limit(토큰 기준). 이 비율이 가장 원칙적인 근거.
+- **5 (현재값)**: session이 선택에 실질적으로 기여하도록 보수적으로 설정. 사용하면서 경험적으로 조정.
+
+값을 올리면 → weekly 우선도 강화, session 영향 감소
+값을 내리면 → session 영향 증가, 둘이 더 균등하게 작용
+
+### `usage.js` 추가 필드
+
+`checkUsage()`가 기존 `sessionResetsAt` / `weeklyResetsAt` 외에 두 필드를 추가로 반환:
+
+```js
+sessionRemainingTimePercent  // 5시간 창 중 남은 시간 비율 (0~100)
+weeklyRemainingTimePercent   // 7일 창 중 남은 시간 비율 (0~100)
+```
+
+`resets_at` 타임스탬프가 없으면 `null` (scorer에서 50% 기본값 사용).
+
+### Blocked 계정 처리
+
+`sessionPercent >= 98` 또는 `weeklyPercent >= 98`이면 `drainScore = -Infinity` → 정렬 후순위.
+모든 계정이 blocked인 경우 runner.js가 가장 이른 리셋 시각까지 대기.
+
 ## Commit & Pull Request Guidelines
 
 - Follow concise, action-oriented commit messages (e.g., "Add fetch timeout to usage API calls")

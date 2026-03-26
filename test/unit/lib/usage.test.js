@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizePercent, checkUsage, fetchProfile, checkAllUsage } from '../../../lib/usage.js';
+import { normalizePercent, computeRemainingTimePercent, checkUsage, fetchProfile, checkAllUsage } from '../../../lib/usage.js';
 
 describe('normalizePercent', () => {
   it('converts 0.5 fraction to 50%', () => {
@@ -46,6 +46,37 @@ describe('normalizePercent', () => {
   });
 });
 
+describe('computeRemainingTimePercent', () => {
+  const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
+  const WEEKLY_WINDOW_MS  = 7 * 24 * 60 * 60 * 1000;
+
+  it('returns null when resetsAt is null', () => {
+    assert.equal(computeRemainingTimePercent(null, SESSION_WINDOW_MS), null);
+  });
+
+  it('returns ~50% when reset is exactly half the session window away', () => {
+    const now = Date.now();
+    const halfWindow = SESSION_WINDOW_MS / 2;
+    const resetsAt = new Date(now + halfWindow).toISOString();
+    const result = computeRemainingTimePercent(resetsAt, SESSION_WINDOW_MS, now);
+    assert.ok(Math.abs(result - 50) < 0.01, `expected ~50, got ${result}`);
+  });
+
+  it('returns 100% when reset is exactly one full window away', () => {
+    const now = Date.now();
+    const resetsAt = new Date(now + WEEKLY_WINDOW_MS).toISOString();
+    const result = computeRemainingTimePercent(resetsAt, WEEKLY_WINDOW_MS, now);
+    assert.equal(result, 100);
+  });
+
+  it('returns 0% when reset is in the past', () => {
+    const now = Date.now();
+    const resetsAt = new Date(now - 1000).toISOString();
+    const result = computeRemainingTimePercent(resetsAt, SESSION_WINDOW_MS, now);
+    assert.equal(result, 0);
+  });
+});
+
 describe('checkUsage', () => {
   let originalFetch;
 
@@ -71,6 +102,9 @@ describe('checkUsage', () => {
     assert.equal(result.weeklyPercent, 75);
     assert.equal(result.sessionResetsAt, '2026-02-15T12:00:00Z');
     assert.equal(result.weeklyResetsAt, '2026-02-20T00:00:00Z');
+    // resets_at is in the past → remainingTimePercent should be 0
+    assert.equal(result.sessionRemainingTimePercent, 0);
+    assert.equal(result.weeklyRemainingTimePercent, 0);
     assert.equal(result.error, null);
   });
 

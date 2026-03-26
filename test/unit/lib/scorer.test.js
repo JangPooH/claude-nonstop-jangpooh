@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickBestAccount, pickByPriority, PRIORITY_THRESHOLD } from '../../../lib/scorer.js';
+import { pickBestAccount, pickByPriority, drainScore, PRIORITY_THRESHOLD } from '../../../lib/scorer.js';
 
 const makeAccount = (name, sessionPercent, weeklyPercent, opts = {}) => ({
   name,
@@ -9,12 +9,17 @@ const makeAccount = (name, sessionPercent, weeklyPercent, opts = {}) => ({
   priority: opts.priority ?? undefined,
   usage: opts.error
     ? { error: opts.error }
-    : { sessionPercent, weeklyPercent },
+    : {
+        sessionPercent,
+        weeklyPercent,
+        sessionRemainingTimePercent: opts.sessionRemaining ?? null,
+        weeklyRemainingTimePercent:  opts.weeklyRemaining  ?? null,
+      },
 });
 
 describe('pickBestAccount', () => {
 
-  it('picks the account with the lowest utilization', () => {
+  it('picks the account with the most available capacity (lowest utilization, equal time remaining)', () => {
     const accounts = [
       makeAccount('high', 80, 50),
       makeAccount('low', 10, 20),
@@ -24,10 +29,10 @@ describe('pickBestAccount', () => {
     assert.equal(result.account.name, 'low');
   });
 
-  it('uses the higher of session or weekly percent', () => {
+  it('deprioritizes account with high weekly usage even if session is low', () => {
     const accounts = [
-      makeAccount('a', 10, 90),  // effective: 90
-      makeAccount('b', 50, 20),  // effective: 50
+      makeAccount('a', 10, 90),  // low session but 90% weekly used → little weekly capacity left
+      makeAccount('b', 50, 20),  // higher session but 80% weekly capacity remaining
     ];
     const result = pickBestAccount(accounts);
     assert.equal(result.account.name, 'b');
@@ -103,12 +108,12 @@ describe('pickBestAccount', () => {
     assert.ok(result.reason.includes('30%'));
   });
 
-  it('handles accounts with null usage as 100% utilization', () => {
+  it('handles accounts with null usage as worst case', () => {
     const accounts = [
       { name: 'null-usage', configDir: '/tmp/null', token: 'sk-ant-oat01-x', usage: null },
       makeAccount('ok', 50, 50),
     ];
-    // null usage -> effectiveUtilization returns 100, so 'ok' wins
+    // null usage -> drainScore returns -Infinity, so 'ok' wins
     const result = pickBestAccount(accounts);
     assert.equal(result.account.name, 'ok');
   });
@@ -137,6 +142,17 @@ describe('pickBestAccount', () => {
   });
 
   // Without usePriority, priority is ignored
+  it('prefers account with imminent weekly reset over one with distant reset', () => {
+    const accounts = [
+      // weekly reset is far away — not urgent
+      makeAccount('fresh', 30, 30, { weeklyRemaining: 80, sessionRemaining: 50 }),
+      // weekly reset is near (3% of 7d ≈ 5h) with 30% capacity left — urgent to drain
+      makeAccount('expiring', 30, 70, { weeklyRemaining: 3, sessionRemaining: 50 }),
+    ];
+    const result = pickBestAccount(accounts);
+    assert.equal(result.account.name, 'expiring');
+  });
+
   it('ignores priority when usePriority is false (default)', () => {
     const accounts = [
       makeAccount('pri1', 80, 80, { priority: 1 }),  // effective: 80
@@ -250,5 +266,31 @@ describe('pickByPriority', () => {
 describe('PRIORITY_THRESHOLD', () => {
   it('is 98', () => {
     assert.equal(PRIORITY_THRESHOLD, 98);
+  });
+});
+
+describe('drainScore', () => {
+  it('returns -Infinity for null usage', () => {
+    assert.equal(drainScore(null), -Infinity);
+  });
+
+  it('returns -Infinity when sessionPercent >= 98', () => {
+    assert.equal(drainScore({ sessionPercent: 98, weeklyPercent: 0 }), -Infinity);
+  });
+
+  it('returns -Infinity when weeklyPercent >= 98', () => {
+    assert.equal(drainScore({ sessionPercent: 0, weeklyPercent: 99 }), -Infinity);
+  });
+
+  it('higher score for account with imminent weekly reset and remaining capacity', () => {
+    const urgent   = drainScore({ sessionPercent: 30, weeklyPercent: 70, sessionRemainingTimePercent: 50, weeklyRemainingTimePercent: 3 });
+    const notUrgent = drainScore({ sessionPercent: 30, weeklyPercent: 30, sessionRemainingTimePercent: 50, weeklyRemainingTimePercent: 80 });
+    assert.ok(urgent > notUrgent, `urgent (${urgent.toFixed(2)}) should beat notUrgent (${notUrgent.toFixed(2)})`);
+  });
+
+  it('returns finite score for valid usage with null time fields (defaults to 50%)', () => {
+    const score = drainScore({ sessionPercent: 50, weeklyPercent: 50, sessionRemainingTimePercent: null, weeklyRemainingTimePercent: null });
+    assert.ok(isFinite(score));
+    assert.ok(score > 0);
   });
 });
