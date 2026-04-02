@@ -1651,7 +1651,7 @@ function makeBar(percent, remainingTimePercent = null, width = 25) {
   const RESET = '\x1b[0m';
   let color;
   if (safePercent >= 90) color = '\x1b[31m';       // RED
-  else if (safePercent >= 75) color = '\x1b[95m';  // BRIGHT_MAGENTA
+  else if (safePercent >= 75) color = '\x1b[38;5;208m';  // ORANGE
   else color = '\x1b[94m';                          // BRIGHT_BLUE
 
   // 각 위치의 문자 반환 (마커 없이)
@@ -1682,7 +1682,7 @@ function makeBar(percent, remainingTimePercent = null, width = 25) {
   // 시간 마커: 배경색으로 강조
   let markerBg;
   if (safePercent >= 90) markerBg = '\x1b[1;30;101m';      // bold + black text + bright red bg
-  else if (safePercent >= 75) markerBg = '\x1b[1;30;103m'; // bold + black text + bright yellow bg
+  else if (safePercent >= 75) markerBg = '\x1b[38;5;214m'; // bright orange (contrasts with bar's 208)
   else markerBg = '\x1b[1;30;106m';                         // bold + black text + bright cyan bg
 
   // 마커 앞 구간
@@ -1699,7 +1699,7 @@ function makeBar(percent, remainingTimePercent = null, width = 25) {
   let markerCode;
   if (markerChar !== '░') {
     if (safePercent >= 90) markerCode = '\x1b[1;91m';      // bold bright red
-    else if (safePercent >= 75) markerCode = '\x1b[1;93m'; // bold bright yellow
+    else if (safePercent >= 75) markerCode = '\x1b[38;5;214m'; // bright orange (contrasts with bar's 208)
     else markerCode = '\x1b[1;96m';                         // bold bright cyan
   } else {
     markerCode = markerBg;
