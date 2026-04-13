@@ -18,7 +18,8 @@ import { pickBestAccount, pickByPriority } from '../lib/scorer.js';
 import { run } from '../lib/runner.js';
 import { reauthAccount, reauthExpiredAccounts, silentRefresh } from '../lib/reauth.js';
 import { isMacOS } from '../lib/platform.js';
-import { makeBar, formatResetTime, formatUserInfo, formatExtraCredit, getMonthlyResetTime } from '../lib/format.js';
+import { makeBar, formatResetTime, formatUserInfo, formatExtraCredit, getMonthlyResetTime, colorizePercent } from '../lib/format.js';
+import { computeRemainingTimePercent } from '../lib/usage.js';
 import { installService, uninstallService, restartService, getServiceStatus, isServiceInstalled, LOG_PATH } from '../lib/service.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -443,21 +444,33 @@ async function cmdStatus(args = []) {
       if (account.usage.error) {
         console.log(`    Usage: error (${account.usage.error})`);
       } else {
-        const sessionBar = makeBar(account.usage.sessionPercent, account.usage.sessionRemainingTimePercent);
-        const weeklyBar = makeBar(account.usage.weeklyPercent, account.usage.weeklyRemainingTimePercent);
-        console.log(`    5-hour:  ${sessionBar} ${String(account.usage.sessionPercent).padStart(3)}%`);
-        console.log(`    7-day :  ${weeklyBar} ${String(account.usage.weeklyPercent).padStart(3)}%`);
+        // 5-hour session bar
+        const sessionBar = makeBar(account.usage.sessionPercent, account.usage.sessionRemainingTimePercent, 25, null);
+        const sessionPercent = colorizePercent(account.usage.sessionPercent);
+        console.log(`    5-hour:  ${sessionBar} ${sessionPercent}`);
+
+        // 7-day weekly bar
+        const weeklyBar = makeBar(account.usage.weeklyPercent, account.usage.weeklyRemainingTimePercent, 25, null);
+        const weeklyPercent = colorizePercent(account.usage.weeklyPercent);
+        console.log(`    7-day :  ${weeklyBar} ${weeklyPercent}`);
 
         const extraCreditInfo = formatExtraCredit(account.usage.raw?.extra_usage);
         if (extraCreditInfo) {
           if (extraCreditInfo.enabled) {
-            const creditBar = makeBar(extraCreditInfo.utilized);
+            const creditPercent = Number(extraCreditInfo.utilized);
+            const creditRemainingPercent = computeRemainingTimePercent(
+              getMonthlyResetTime(),
+              30 * 24 * 60 * 60 * 1000  // 30 days in ms
+            );
+            const creditBar = makeBar(creditPercent, creditRemainingPercent, 20, 'warning');
+            const creditPercentColored = colorizePercent(creditPercent, 'warning', 5);
             const usedDollars = (extraCreditInfo.usedCents / 100).toFixed(2);
             const limitDollars = (extraCreditInfo.limitCents / 100).toFixed(2);
-            const creditPercent = Number(extraCreditInfo.utilized).toFixed(1);
-            console.log(`    credit:  ${creditBar} ${String(creditPercent).padStart(5)}% ($${usedDollars} / $${limitDollars})`);
+            console.log(`    credit:  ${creditBar} ${creditPercentColored} ($${usedDollars} / $${limitDollars})`);
           } else {
-            console.log(`    credit:  disabled`);
+            const DIM = '\x1b[2m';
+            const RESET = '\x1b[0m';
+            console.log(`    credit:  ${DIM}disabled${RESET}`);
           }
         }
 
@@ -465,7 +478,7 @@ async function cmdStatus(args = []) {
           console.log(`    Session resets: ${formatResetTime(account.usage.sessionResetsAt)}`);
         }
         if (account.usage.weeklyResetsAt) {
-          console.log(`     Weekly resets: ${formatResetTime(account.usage.weeklyResetsAt)}`);
+          console.log(`    Weekly resets:  ${formatResetTime(account.usage.weeklyResetsAt)}`);
         }
 
         if (extraCreditInfo && extraCreditInfo.enabled) {
