@@ -18,7 +18,7 @@ import { pickBestAccount, pickByPriority } from '../lib/scorer.js';
 import { run } from '../lib/runner.js';
 import { reauthAccount, reauthExpiredAccounts, silentRefresh } from '../lib/reauth.js';
 import { isMacOS } from '../lib/platform.js';
-import { makeBar, formatResetTime, formatUserInfo, formatExtraCredit } from '../lib/format.js';
+import { makeBar, formatResetTime, formatUserInfo, formatExtraCredit, getMonthlyResetTime } from '../lib/format.js';
 import { installService, uninstallService, restartService, getServiceStatus, isServiceInstalled, LOG_PATH } from '../lib/service.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -448,6 +448,19 @@ async function cmdStatus(args = []) {
         console.log(`    5-hour:  ${sessionBar} ${String(account.usage.sessionPercent).padStart(3)}%`);
         console.log(`    7-day :  ${weeklyBar} ${String(account.usage.weeklyPercent).padStart(3)}%`);
 
+        const extraCreditInfo = formatExtraCredit(account.usage.raw?.extra_usage);
+        if (extraCreditInfo) {
+          if (extraCreditInfo.enabled) {
+            const creditBar = makeBar(extraCreditInfo.utilized);
+            const usedDollars = (extraCreditInfo.usedCents / 100).toFixed(2);
+            const limitDollars = (extraCreditInfo.limitCents / 100).toFixed(2);
+            const creditPercent = Number(extraCreditInfo.utilized).toFixed(1);
+            console.log(`    credit:  ${creditBar} ${String(creditPercent).padStart(5)}% ($${usedDollars} / $${limitDollars})`);
+          } else {
+            console.log(`    credit:  disabled`);
+          }
+        }
+
         if (account.usage.sessionResetsAt) {
           console.log(`    Session resets: ${formatResetTime(account.usage.sessionResetsAt)}`);
         }
@@ -455,9 +468,9 @@ async function cmdStatus(args = []) {
           console.log(`     Weekly resets: ${formatResetTime(account.usage.weeklyResetsAt)}`);
         }
 
-        const extraCreditInfo = formatExtraCredit(account.usage.raw?.extra_usage);
-        if (extraCreditInfo) {
-          console.log(`    ${extraCreditInfo}`);
+        if (extraCreditInfo && extraCreditInfo.enabled) {
+          const monthlyResetTime = formatResetTime(getMonthlyResetTime());
+          console.log(`    Credit resets:  ${monthlyResetTime}`);
         }
 
         if (showRaw && account.usage.raw) {
