@@ -18,7 +18,7 @@ import { pickBestAccount, pickByPriority } from '../lib/scorer.js';
 import { run } from '../lib/runner.js';
 import { reauthAccount, reauthExpiredAccounts, silentRefresh } from '../lib/reauth.js';
 import { isMacOS } from '../lib/platform.js';
-import { makeBar, formatResetTime, formatUserInfo } from '../lib/format.js';
+import { makeBar, formatResetTime, formatUserInfo, formatExtraCredit } from '../lib/format.js';
 import { installService, uninstallService, restartService, getServiceStatus, isServiceInstalled, LOG_PATH } from '../lib/service.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -454,6 +454,12 @@ async function cmdStatus(args = []) {
         if (account.usage.weeklyResetsAt) {
           console.log(`     Weekly resets: ${formatResetTime(account.usage.weeklyResetsAt)}`);
         }
+
+        const extraCreditInfo = formatExtraCredit(account.usage.raw?.extra_usage);
+        if (extraCreditInfo) {
+          console.log(`    ${extraCreditInfo}`);
+        }
+
         if (showRaw && account.usage.raw) {
           console.log(`    Raw API: ${JSON.stringify(account.usage.raw)}`);
         }
