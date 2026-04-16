@@ -416,7 +416,7 @@ async function cmdStatus(args = []) {
           const creds = readCredentials(account.configDir);
           if (creds.token) {
             account.token = creds.token;
-            account.usage = await checkUsage(creds.token);
+            account.usage = await checkUsage(creds.token, account.configDir);
             // Re-fetch profile with refreshed token
             const profile = await fetchProfile(creds.token);
             const idx = authenticated.findIndex(a => a.name === account.name);
