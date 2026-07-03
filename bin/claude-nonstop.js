@@ -77,6 +77,10 @@ switch (command) {
     await cmdResume(args.slice(1));
     break;
 
+  case 'resume-info':
+    await cmdResumeInfo(args.slice(1));
+    break;
+
   case 'use':
     await cmdUse(args.slice(1));
     break;
@@ -690,8 +694,14 @@ async function cmdResume(resumeArgs) {
   const sessionId = sessionIdArg || found.sessionId;
   console.error(`[claude-nonstop] Found session ${sessionId} in account "${found.account.name}"`);
 
-  // Build claude args
+  // Build claude args. Forward any flags the caller passed alongside the
+  // session id (e.g. --model=sonnet) — only the raw session id positional
+  // is dropped, since it's re-added explicitly via --resume.
   const claudeArgs = ['--resume', sessionId];
+  for (const a of resumeArgs) {
+    if (a === sessionIdArg) continue;
+    claudeArgs.push(a);
+  }
   if (remoteAccess && !claudeArgs.includes('--dangerously-skip-permissions')) {
     claudeArgs.push('--dangerously-skip-permissions');
   }
@@ -784,6 +794,51 @@ async function cmdResume(resumeArgs) {
   }
 
   await run(claudeArgs, selectedAccount, accounts, { remoteAccess });
+}
+
+/**
+ * Look up the session that `resume` would target — sessionId, the account it
+ * lives in, and the model from its last assistant turn — without launching
+ * claude. Prints "sessionId\taccountName\tmodelShorthand" to stdout for shell
+ * integration (e.g. a `cldr` function that resumes with the original account
+ * and model). Errors go to stderr; empty model field means "unknown".
+ */
+async function cmdResumeInfo(resumeArgs) {
+  const accounts = getAccounts();
+  if (accounts.length === 0) {
+    console.error('No accounts registered. Run "claude-nonstop add <name>" first.');
+    process.exit(1);
+  }
+
+  const { findSessionAcrossProfiles, findLatestSessionAcrossProfiles, getLastAssistantModel, getLastUsedAccount } = await import('../lib/session.js');
+
+  const sessionIdArg = resumeArgs.find(a => !a.startsWith('-'));
+  let found;
+
+  if (sessionIdArg) {
+    found = findSessionAcrossProfiles(accounts, sessionIdArg);
+    if (!found) {
+      console.error(`Error: Session "${sessionIdArg}" not found in any account.`);
+      process.exit(1);
+    }
+  } else {
+    found = findLatestSessionAcrossProfiles(accounts, process.cwd());
+    if (!found) {
+      console.error('Error: No resumable session found for this project (all matching sessions may be active in another terminal).');
+      process.exit(1);
+    }
+  }
+
+  const sessionId = sessionIdArg || found.sessionId;
+
+  // Verify which account actually last used this session by checking history.jsonl
+  const actualAccount = getLastUsedAccount(accounts, sessionId) || found.account;
+
+  const rawModel = getLastAssistantModel(found.path);
+  const modelMatch = rawModel?.match(/opus|sonnet|haiku|fable/i);
+  const modelShorthand = modelMatch ? modelMatch[0].toLowerCase() : '';
+
+  console.log(`${sessionId}\t${actualAccount.name}\t${modelShorthand}`);
 }
 
 // ─── Use & Priority Commands ────────────────────────────────────────────────
@@ -1634,6 +1689,7 @@ Commands:
   list                 List accounts with auth status
   reauth               Re-authenticate expired accounts
   resume [id]          Resume most recent session, or a specific one by ID
+  resume-info [id]     Print "sessionId<TAB>account<TAB>model" for resume, no launch (shell integration)
   init <bash|zsh>      Shell integration (add to ~/.bashrc or ~/.zshrc):
                          eval "$(claude-nonstop init bash)"
   use [name|flag]      Switch active account for current shell (Agent SDK, etc.)
