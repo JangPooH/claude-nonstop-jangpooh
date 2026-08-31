@@ -148,6 +148,7 @@ In per-session Slack channels, these commands are handled before tmux relay:
 - `channel-map.json` lives at `~/.claude-nonstop/data/channel-map.json`, not in the project directory. The `channel-manager.cjs` has a one-time migration from the legacy `remote/data/` location.
 - Signal handlers in `runner.js` use an idempotent `cleanup()` function guarded by a `cleaned` boolean to prevent double-kill or cleanup races.
 - `node-pty` has a native dependency. If `npm install` fails, check that build tools (Xcode CLT on macOS, build-essential on Linux) are installed.
+- `lib/fake-git.js` shadows `git` on `PATH` for spawned Claude Code processes so `--resume` doesn't bust the prompt cache when repo state drifts (see DESIGN.md, "Fake-Git PATH Shadow for Resume Cache Preservation"). It requires a companion Claude Code hook that is **not installed by this repo** — see `hooks/README.md` for the source and manual setup steps. Without that hook, the shadow never unlocks and Claude never sees real git state for the rest of the session.
 
 ## Terminology
 

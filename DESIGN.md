@@ -192,6 +192,14 @@ claude-nonstop reads tokens from the OS keychain on every operation rather than 
 
 On macOS, the webhook runs as a launchd service (`claude-nonstop-slack`) with `KeepAlive: true` for automatic restarts. The `setup` command auto-installs the service, and `npm install` (via postinstall script) restarts it to pick up code changes. **Trade-off:** macOS-only — Linux users must manage the webhook process manually (systemd or screen/tmux). The postinstall script is self-contained (no `lib/` imports) to avoid failures during initial install.
 
+### 10. Fake-Git PATH Shadow for Resume Cache Preservation
+
+Claude Code reads git status/log/user-name at session start and bakes it into the prompt-cache prefix. On `--resume` (including claude-nonstop's own rate-limit-triggered account swaps), if the real repo state has drifted since the session began, this changes the cached prefix and forces a full, expensive prompt-cache rewrite. `runOnce()` creates a per-spawn temp directory (`lib/fake-git.js`) containing a `git` script and prepends it to `PATH`; until unlocked, it returns frozen empty values for `status`/`log`/`config user.name`, scoped to the spawned repo only (a `-C`/cwd check against the repo's toplevel passes through anything targeting a different repo, so unrelated hooks checking other git repos aren't affected). The shadow directory is cleaned up when the spawned process exits, and a startup sweep (keyed by a `.pid` file, not the directory name — renaming after spawn would break the already-baked-in `PATH` string) recovers directories orphaned by an uncatchable `SIGKILL`.
+
+A companion hook, not part of this repo (`hooks/README.md`), injects the real git values into context separately and unlocks the shadow via a `.unlocked` marker on the first `UserPromptSubmit` of a session — by then Claude Code's own native git fetch has already happened, so unlocking earlier isn't necessary, and Claude Code doesn't document an ordering guarantee between `SessionStart` and `UserPromptSubmit` that would make unlocking any earlier provably safe. Other hooks that need real git data during the same session must read `CLAUDE_NONSTOP_REAL_GIT` explicitly rather than shelling out to bare `git`, since hooks on the same event run in parallel with no guaranteed order relative to the unlock.
+
+**Trade-off:** branch can't be shadowed this way — Claude Code reads `.git/HEAD` directly rather than shelling out to `git` — so a branch change between resumes still costs a full cache rewrite. The companion hook detects this specific case (comparing real branch fingerprints across resumes) and warns before sending, rather than silently eating the cost.
+
 ## Slack Communication Improvements
 
 ### Problem
@@ -274,6 +282,7 @@ bin/claude-nonstop.js
   │     ├── lib/scorer.js
   │     ├── lib/session.js
   │     ├── lib/reauth.js ─── lib/keychain.js
+  │     ├── lib/fake-git.js
   │     └── (spawns) remote/hook-notify.cjs (account-switch)
   ├── lib/reauth.js
   └── lib/tmux.js
