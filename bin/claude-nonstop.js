@@ -384,6 +384,7 @@ async function cmdList() {
 
 async function cmdStatus(args = []) {
   const showRaw = args.includes('--raw');
+  const forceRefresh = args.includes('-f') || args.includes('--force');
   const accounts = getAccounts();
 
   if (accounts.length === 0) {
@@ -405,7 +406,7 @@ async function cmdStatus(args = []) {
   if (authenticated.length > 0) {
     // Fetch usage and profiles in parallel
     let [withUsage, profiles] = await Promise.all([
-      checkAllUsage(authenticated),
+      checkAllUsage(authenticated, { forceRefresh }),
       Promise.all(authenticated.map(a => fetchProfile(a.token))),
     ]);
 
@@ -420,7 +421,7 @@ async function cmdStatus(args = []) {
           const creds = readCredentials(account.configDir);
           if (creds.token) {
             account.token = creds.token;
-            account.usage = await checkUsage(creds.token, account.configDir);
+            account.usage = await checkUsage(creds.token, account.configDir, { forceRefresh });
             // Re-fetch profile with refreshed token
             const profile = await fetchProfile(creds.token);
             const idx = authenticated.findIndex(a => a.name === account.name);
@@ -478,12 +479,15 @@ async function cmdStatus(args = []) {
           }
         }
 
-        if (account.usage.sessionResetsAt) {
-          console.log(`    Session resets: ${formatResetTime(account.usage.sessionResetsAt)}`);
-        }
-        if (account.usage.weeklyResetsAt) {
-          console.log(`    Weekly resets:  ${formatResetTime(account.usage.weeklyResetsAt)}`);
-        }
+        const sessionResetStr = account.usage.sessionResetsAt
+          ? formatResetTime(account.usage.sessionResetsAt)
+          : '-';
+        console.log(`    Session resets: ${sessionResetStr}`);
+
+        const weeklyResetStr = account.usage.weeklyResetsAt
+          ? formatResetTime(account.usage.weeklyResetsAt)
+          : '-';
+        console.log(`    Weekly resets:  ${weeklyResetStr}`);
 
         if (extraCreditInfo && extraCreditInfo.enabled) {
           const monthlyResetTime = formatResetTime(getMonthlyResetTime());
@@ -1684,6 +1688,7 @@ Usage:
 
 Commands:
   status               Show usage with progress bars and reset times
+                         status -f/--force      Force refresh cache (skip cached data)
   add <name>           Add a new Claude account
   remove <name>        Remove an account
   list                 List accounts with auth status
