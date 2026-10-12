@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { RATE_LIMIT_PATTERN, stripAnsi, findEarliestReset, formatDuration, sleep, EXHAUSTION_THRESHOLD, MAX_SLEEP_MS } from '../../../lib/runner.js';
+import { RATE_LIMIT_PATTERN, stripAnsi, findEarliestReset, formatDuration, sleep, EXHAUSTION_THRESHOLD, MAX_SLEEP_MS, isRateLimitConfirmed } from '../../../lib/runner.js';
 import { effectiveUtilization } from '../../../lib/scorer.js';
 
 describe('RATE_LIMIT_PATTERN', () => {
@@ -415,5 +415,42 @@ describe('EXHAUSTION_THRESHOLD and MAX_SLEEP_MS constants', () => {
     // Over the cap
     assert.equal(clamp(12 * 60 * 60 * 1000), MAX_SLEEP_MS); // 12h clamped to 6h
     assert.equal(clamp(24 * 60 * 60 * 1000), MAX_SLEEP_MS); // 24h clamped to 6h
+  });
+});
+
+describe('isRateLimitConfirmed', () => {
+  const usage = (sessionPercent, weeklyPercent, raw = null) => ({
+    sessionPercent, weeklyPercent, raw, error: null,
+  });
+
+  it('rejects replayed banner when usage is low', () => {
+    assert.equal(isRateLimitConfirmed(usage(0, 0)), false);
+    assert.equal(isRateLimitConfirmed(usage(94, 98)), false);
+  });
+
+  it('confirms 5-hour at 95%+', () => {
+    assert.equal(isRateLimitConfirmed(usage(95, 0)), true);
+    assert.equal(isRateLimitConfirmed(usage(100, 0)), true);
+  });
+
+  it('confirms 7-day only at 99%+', () => {
+    assert.equal(isRateLimitConfirmed(usage(0, 98)), false);
+    assert.equal(isRateLimitConfirmed(usage(0, 99)), true);
+  });
+
+  it('uses scoped weekly utilization from raw (seven_day_*)', () => {
+    const raw = { seven_day_opus: { utilization: 100 }, seven_day_sonnet: null };
+    assert.equal(isRateLimitConfirmed(usage(0, 0, raw)), true);
+  });
+
+  it('uses limits[] by group', () => {
+    assert.equal(isRateLimitConfirmed(usage(0, 0, { limits: [{ group: 'session', percent: 96 }] })), true);
+    assert.equal(isRateLimitConfirmed(usage(0, 0, { limits: [{ group: 'weekly', percent: 98 }] })), false);
+    assert.equal(isRateLimitConfirmed(usage(0, 0, { limits: [{ group: 'weekly', percent: 99 }] })), true);
+  });
+
+  it('trusts the banner when usage is missing or errored', () => {
+    assert.equal(isRateLimitConfirmed(null), true);
+    assert.equal(isRateLimitConfirmed({ sessionPercent: 0, weeklyPercent: 0, raw: null, error: 'timeout' }), true);
   });
 });
