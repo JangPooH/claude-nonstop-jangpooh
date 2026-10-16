@@ -13,6 +13,7 @@ import {
   findLatestSessionAcrossProfiles,
   migrateSessionByHash,
   validateSessionId,
+  getLiveSessionId,
 } from '../../../lib/session.js';
 
 // Valid UUIDs for tests
@@ -282,6 +283,43 @@ describe('findSessionAcrossProfiles', () => {
   it('rejects path traversal in session ID', () => {
     const accounts = [{ name: 'acct1', configDir: join(tempDir, 'a') }];
     assert.throws(() => findSessionAcrossProfiles(accounts, '../../etc/passwd'), /Invalid session ID/);
+  });
+});
+
+describe('getLiveSessionId', () => {
+  let tempDir;
+
+  beforeEach(() => {
+    tempDir = createTempDir();
+    mkdirSync(join(tempDir, 'sessions'), { recursive: true });
+  });
+
+  afterEach(() => {
+    removeTempDir(tempDir);
+  });
+
+  it('returns the session ID from the pid registry entry', () => {
+    writeFileSync(join(tempDir, 'sessions', '1234.json'), JSON.stringify({ pid: 1234, sessionId: UUID1 }));
+    assert.equal(getLiveSessionId(tempDir, 1234), UUID1);
+  });
+
+  it('ignores a newer session file in the same project', () => {
+    writeFileSync(join(tempDir, 'sessions', '1234.json'), JSON.stringify({ pid: 1234, sessionId: UUID1 }));
+    mkdirSync(join(tempDir, 'projects', '-tmp-project'), { recursive: true });
+    writeFileSync(join(tempDir, 'projects', '-tmp-project', `${UUID2}.jsonl`), 'data');
+    assert.equal(getLiveSessionId(tempDir, 1234), UUID1);
+  });
+
+  it('returns null when no entry exists for the pid', () => {
+    writeFileSync(join(tempDir, 'sessions', '1234.json'), JSON.stringify({ pid: 1234, sessionId: UUID1 }));
+    assert.equal(getLiveSessionId(tempDir, 5678), null);
+  });
+
+  it('returns null for malformed entries or invalid session IDs', () => {
+    writeFileSync(join(tempDir, 'sessions', '1.json'), 'not json');
+    writeFileSync(join(tempDir, 'sessions', '2.json'), JSON.stringify({ pid: 2, sessionId: '../../etc/passwd' }));
+    assert.equal(getLiveSessionId(tempDir, 1), null);
+    assert.equal(getLiveSessionId(tempDir, 2), null);
   });
 });
 
