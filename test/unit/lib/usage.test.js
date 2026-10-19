@@ -1,6 +1,10 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizePercent, computeRemainingTimePercent, checkUsage, fetchProfile, checkAllUsage } from '../../../lib/usage.js';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { normalizePercent, computeRemainingTimePercent, checkUsage, readProfile, checkAllUsage } from '../../../lib/usage.js';
+import { writeCache } from '../../../lib/cache.js';
+import { createTempDir, removeTempDir } from '../../helpers/temp-dir.js';
 
 describe('normalizePercent', () => {
   it('converts 0.5 fraction to 50%', () => {
@@ -157,59 +161,66 @@ describe('checkUsage', () => {
   });
 });
 
-describe('fetchProfile', () => {
-  let originalFetch;
+describe('readProfile', () => {
+  let dir;
 
-  beforeEach(() => {
-    originalFetch = globalThis.fetch;
+  beforeEach(() => { dir = createTempDir('cn-profile-'); });
+  afterEach(() => { removeTempDir(dir); });
+
+  it('reads name and email from .claude.json oauthAccount', () => {
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify({
+      oauthAccount: { fullName: 'Test User', displayName: 'tu', emailAddress: 'test@example.com' },
+    }));
+    assert.deepEqual(readProfile(dir), { name: 'Test User', email: 'test@example.com' });
   });
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
+  it('falls back to displayName', () => {
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify({
+      oauthAccount: { displayName: 'Display Name', emailAddress: 'test@example.com' },
+    }));
+    assert.equal(readProfile(dir).name, 'Display Name');
   });
 
-  it('extracts name and email', async () => {
-    globalThis.fetch = async () => ({
-      ok: true,
-      json: async () => ({
-        account: { full_name: 'Test User', email: 'test@example.com' },
-      }),
+  it('returns nulls when the file is missing', () => {
+    assert.deepEqual(readProfile(dir), { name: null, email: null });
+  });
+
+  it('returns nulls when oauthAccount is absent', () => {
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify({}));
+    assert.deepEqual(readProfile(dir), { name: null, email: null });
+  });
+});
+
+describe('checkUsage with a probe-sourced cache', () => {
+  let dir;
+
+  beforeEach(() => { dir = createTempDir('cn-probe-cache-'); });
+  afterEach(() => { removeTempDir(dir); });
+
+  it('keeps a window the probe did not report as null, not 0', async () => {
+    writeCache(dir, {
+      source: 'probe',
+      five_hour: { utilization: 100, resets_at: '2026-10-19T14:10:00.000Z' },
+      seven_day: null,
     });
 
-    const result = await fetchProfile('sk-ant-oat01-test');
-    assert.equal(result.name, 'Test User');
-    assert.equal(result.email, 'test@example.com');
+    const result = await checkUsage('unused', dir);
+    assert.equal(result.sessionPercent, 100);
+    assert.equal(result.weeklyPercent, null);
+    assert.equal(result.weeklyRemainingTimePercent, null);
+    assert.equal(result.error, null);
   });
 
-  it('returns nulls on error', async () => {
-    globalThis.fetch = async () => ({
-      ok: false,
-      status: 500,
+  it('reads both windows when the probe reported them', async () => {
+    writeCache(dir, {
+      source: 'probe',
+      five_hour: { utilization: 45, resets_at: '2026-10-19T14:10:00.000Z' },
+      seven_day: { utilization: 7, resets_at: '2026-10-22T15:00:00.000Z' },
     });
 
-    const result = await fetchProfile('sk-ant-oat01-test');
-    assert.equal(result.name, null);
-    assert.equal(result.email, null);
-  });
-
-  it('returns nulls on network error', async () => {
-    globalThis.fetch = async () => { throw new Error('fail'); };
-
-    const result = await fetchProfile('sk-ant-oat01-test');
-    assert.equal(result.name, null);
-    assert.equal(result.email, null);
-  });
-
-  it('uses display_name fallback', async () => {
-    globalThis.fetch = async () => ({
-      ok: true,
-      json: async () => ({
-        account: { display_name: 'Display Name', email: 'test@example.com' },
-      }),
-    });
-
-    const result = await fetchProfile('sk-ant-oat01-test');
-    assert.equal(result.name, 'Display Name');
+    const result = await checkUsage('unused', dir);
+    assert.equal(result.sessionPercent, 45);
+    assert.equal(result.weeklyPercent, 7);
   });
 });
 

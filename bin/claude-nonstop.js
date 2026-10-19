@@ -13,10 +13,11 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { addAccount, removeAccount, getAccounts, ensureDefaultAccount, validateAccountName, setAccountPriority, clearAccountPriority, CONFIG_DIR, DEFAULT_CLAUDE_DIR } from '../lib/config.js';
 import { readCredentials, isTokenExpired, deleteKeychainEntry } from '../lib/keychain.js';
-import { checkAllUsage, checkUsage, fetchProfile } from '../lib/usage.js';
+import { checkAllUsage, checkUsage, readProfile } from '../lib/usage.js';
 import { pickBestAccount, pickByPriority } from '../lib/scorer.js';
 import { run } from '../lib/runner.js';
 import { reauthAccount, reauthExpiredAccounts, silentRefresh } from '../lib/reauth.js';
+import { getSetupToken, setSetupToken } from '../lib/probe.js';
 import { isMacOS } from '../lib/platform.js';
 import { makeBar, formatResetTime, formatUserInfo, formatExtraCredit, getMonthlyResetTime, colorizePercent } from '../lib/format.js';
 import { computeRemainingTimePercent } from '../lib/usage.js';
@@ -160,15 +161,14 @@ async function cmdAdd(args) {
     console.log(`Account "${name}" authenticated. Checking for duplicates...`);
 
     // Duplicate detection: compare profile email against existing accounts
-    const newProfile = await fetchProfile(creds.token);
+    const newProfile = readProfile(configDir);
     if (newProfile.email) {
       const existingAccounts = getAccounts().filter(a => a.name !== name);
-      const existingProfiles = await Promise.all(existingAccounts.map(async (a) => {
+      const existingProfiles = existingAccounts.map(a => {
         const existingCreds = readCredentials(a.configDir);
         if (!existingCreds.token) return { ...a, email: null };
-        const profile = await fetchProfile(existingCreds.token);
-        return { ...a, email: profile.email };
-      }));
+        return { ...a, email: readProfile(a.configDir).email };
+      });
 
       const duplicate = existingProfiles.find(a => a.email && a.email === newProfile.email);
       if (duplicate) {
@@ -203,6 +203,70 @@ async function cmdRemove(args) {
     console.error(`Error: ${err.message}`);
     process.exit(1);
   }
+}
+
+/**
+ * Read one line from the TTY without echoing it.
+ */
+function promptHidden(label) {
+  return new Promise((resolve) => {
+    process.stderr.write(label);
+    process.stdin.setRawMode(true);
+    process.stdin.setEncoding('utf8');
+    process.stdin.resume();
+    let input = '';
+
+    const onData = (chunk) => {
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') {
+          process.stdin.removeListener('data', onData);
+          process.stdin.setRawMode(false);
+          process.stdin.pause();
+          process.stderr.write('\n');
+          // Drop escape sequences some terminals add around pasted text
+          resolve(input.replace(/\x1b\[[0-9;]*[~A-Za-z]/g, '').trim());
+          return;
+        }
+        if (ch === '\x03') { // Ctrl-C
+          process.stdin.setRawMode(false);
+          process.stderr.write('\n');
+          process.exit(130);
+        }
+        if (ch === '\x7f') input = input.slice(0, -1);
+        else input += ch;
+      }
+    };
+    process.stdin.on('data', onData);
+  });
+}
+
+async function cmdSetToken(name) {
+  if (!name) {
+    console.error('Error: --set-token requires an account: claude-nonstop -a <name> --set-token');
+    process.exit(1);
+  }
+  if (!getAccounts().some(a => a.name === name)) {
+    console.error(`Error: Account "${name}" not found.`);
+    process.exit(1);
+  }
+  if (!isMacOS()) {
+    console.error('Error: --set-token is only supported on macOS (Keychain).');
+    process.exit(1);
+  }
+  if (!process.stdin.isTTY) {
+    console.error('Error: --set-token needs an interactive terminal.');
+    process.exit(1);
+  }
+
+  console.error(`Run \`command claude setup-token\` and authorize "${name}"'s account in the browser, then paste the token.`);
+  const token = await promptHidden(`Setup-token for "${name}": `);
+  try {
+    setSetupToken(name, token);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+  console.error(`Saved setup-token for "${name}" (Keychain: cc-token-${name}).`);
 }
 
 async function cmdReauth() {
@@ -367,7 +431,7 @@ async function cmdList() {
   // Read credentials and fetch profiles in parallel
   const enriched = await Promise.all(accounts.map(async (account) => {
     const creds = readCredentials(account.configDir);
-    const profile = creds.token ? await fetchProfile(creds.token) : { name: null, email: null };
+    const profile = creds.token ? readProfile(account.configDir) : { name: null, email: null };
     return { ...account, creds, profile };
   }));
 
@@ -407,7 +471,7 @@ async function cmdStatus(args = []) {
     // Fetch usage and profiles in parallel
     let [withUsage, profiles] = await Promise.all([
       checkAllUsage(authenticated, { forceRefresh }),
-      Promise.all(authenticated.map(a => fetchProfile(a.token))),
+      authenticated.map(a => readProfile(a.configDir)),
     ]);
 
     // Silent refresh: retry accounts with auth errors (401 expired, 403 revoked)
@@ -422,10 +486,6 @@ async function cmdStatus(args = []) {
           if (creds.token) {
             account.token = creds.token;
             account.usage = await checkUsage(creds.token, account.configDir, { forceRefresh });
-            // Re-fetch profile with refreshed token
-            const profile = await fetchProfile(creds.token);
-            const idx = authenticated.findIndex(a => a.name === account.name);
-            if (idx !== -1) profiles[idx] = profile;
           }
         }
       }
@@ -522,6 +582,12 @@ async function cmdRun(claudeArgs) {
   // Extract --account / -a flag (consume it, don't pass to claude)
   const requestedAccount = extractAccountFlag(claudeArgs);
 
+  // Extract --set-token flag: store the account's setup-token instead of running Claude
+  if (claudeArgs.includes('--set-token')) {
+    await cmdSetToken(requestedAccount);
+    return;
+  }
+
   // Handle tmux bootstrapping for remote access
   if (remoteAccess) {
     const { isInsideTmux, generateSessionName, reexecInTmux } = await import('../lib/tmux.js');
@@ -564,6 +630,7 @@ async function cmdRun(claudeArgs) {
   // With --account, only the requested account matters; ignore the others.
   const expiredPreFlight = accountsWithCreds.filter(a =>
     (!requestedAccount || a.name === requestedAccount) &&
+    !getSetupToken(a.configDir) && // setup-token accounts don't depend on /login expiry
     (!a.token || (a.expiresAt && isTokenExpired({ expiresAt: a.expiresAt })))
   );
 
@@ -721,6 +788,7 @@ async function cmdResume(resumeArgs) {
   // With --account, only the requested account matters; ignore the others.
   const expiredPreFlight = accountsWithCreds.filter(a =>
     (!requestedAccount || a.name === requestedAccount) &&
+    !getSetupToken(a.configDir) && // setup-token accounts don't depend on /login expiry
     (!a.token || (a.expiresAt && isTokenExpired({ expiresAt: a.expiresAt })))
   );
 
@@ -1716,6 +1784,7 @@ Commands:
 
 Options:
   -a, --account <name>    Use a specific account
+  -a <name> --set-token   Store the account's \`claude setup-token\` token in the Keychain
   --remote-access         Run in tmux with Slack channels
 
 All other arguments are passed through to \`claude\`.
