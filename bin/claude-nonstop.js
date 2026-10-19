@@ -561,8 +561,10 @@ async function cmdRun(claudeArgs) {
   });
 
   // Pre-flight: detect expired tokens and offer re-auth
+  // With --account, only the requested account matters; ignore the others.
   const expiredPreFlight = accountsWithCreds.filter(a =>
-    !a.token || (a.expiresAt && isTokenExpired({ expiresAt: a.expiresAt }))
+    (!requestedAccount || a.name === requestedAccount) &&
+    (!a.token || (a.expiresAt && isTokenExpired({ expiresAt: a.expiresAt })))
   );
 
   if (expiredPreFlight.length > 0 && !remoteAccess) {
@@ -716,8 +718,10 @@ async function cmdResume(resumeArgs) {
     return { ...a, token: creds.token, expiresAt: creds.expiresAt };
   });
 
+  // With --account, only the requested account matters; ignore the others.
   const expiredPreFlight = accountsWithCreds.filter(a =>
-    !a.token || (a.expiresAt && isTokenExpired({ expiresAt: a.expiresAt }))
+    (!requestedAccount || a.name === requestedAccount) &&
+    (!a.token || (a.expiresAt && isTokenExpired({ expiresAt: a.expiresAt })))
   );
 
   if (expiredPreFlight.length > 0 && !remoteAccess) {
