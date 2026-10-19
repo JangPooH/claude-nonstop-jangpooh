@@ -579,6 +579,9 @@ async function cmdRun(claudeArgs) {
     claudeArgs.splice(remoteAccessIdx, 1);
   }
 
+  // Extract --no-auto-switch flag (consume it, don't pass to claude)
+  const noAutoSwitch = extractNoAutoSwitchFlag(claudeArgs);
+
   // Extract --account / -a flag (consume it, don't pass to claude)
   const requestedAccount = extractAccountFlag(claudeArgs);
 
@@ -710,7 +713,7 @@ async function cmdRun(claudeArgs) {
   }
 
   // Run with auto-switching
-  await run(claudeArgs, selectedAccount, accounts, { remoteAccess });
+  await run(claudeArgs, selectedAccount, accounts, { remoteAccess, noAutoSwitch });
 }
 
 async function cmdResume(resumeArgs) {
@@ -720,6 +723,9 @@ async function cmdResume(resumeArgs) {
   if (remoteAccess) {
     resumeArgs.splice(remoteAccessIdx, 1);
   }
+
+  // Extract --no-auto-switch flag (consume it, don't pass to claude)
+  const noAutoSwitch = extractNoAutoSwitchFlag(resumeArgs);
 
   // Extract --account / -a flag (consume it, don't pass to claude)
   const requestedAccount = extractAccountFlag(resumeArgs);
@@ -869,7 +875,7 @@ async function cmdResume(resumeArgs) {
     }
   }
 
-  await run(claudeArgs, selectedAccount, accounts, { remoteAccess });
+  await run(claudeArgs, selectedAccount, accounts, { remoteAccess, noAutoSwitch });
 }
 
 /**
@@ -1748,6 +1754,17 @@ function extractAccountFlag(args) {
   return null;
 }
 
+/**
+ * Extract --no-auto-switch from args array (consumes it in-place).
+ * Returns true if the flag was present.
+ */
+function extractNoAutoSwitchFlag(args) {
+  const idx = args.indexOf('--no-auto-switch');
+  if (idx === -1) return false;
+  args.splice(idx, 1);
+  return true;
+}
+
 function printHelp() {
   console.log(`
 claude-nonstop — Multi-account switching + Slack remote access for Claude Code
@@ -1786,6 +1803,7 @@ Options:
   -a, --account <name>    Use a specific account
   -a <name> --set-token   Store the account's \`claude setup-token\` token in the Keychain
   --remote-access         Run in tmux with Slack channels
+  --no-auto-switch        Disable rate limit detection and auto account switching
 
 All other arguments are passed through to \`claude\`.
 Run \`setup --help\`, \`webhook\`, or \`hooks\` for subcommand details.
