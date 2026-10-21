@@ -18,6 +18,7 @@ import { pickBestAccount, pickByPriority } from '../lib/scorer.js';
 import { run } from '../lib/runner.js';
 import { reauthAccount, reauthExpiredAccounts, silentRefresh } from '../lib/reauth.js';
 import { getSetupToken, setSetupToken } from '../lib/probe.js';
+import { timed, flushStartupTiming } from '../lib/timing.js';
 import { isMacOS } from '../lib/platform.js';
 import { makeBar, formatResetTime, formatUserInfo, formatExtraCredit, getMonthlyResetTime, colorizePercent } from '../lib/format.js';
 import { computeRemainingTimePercent } from '../lib/usage.js';
@@ -624,10 +625,10 @@ async function cmdRun(claudeArgs) {
   }
 
   // Read credentials for all accounts
-  let accountsWithCreds = accounts.map(a => {
+  let accountsWithCreds = await timed('read-credentials', () => accounts.map(a => {
     const creds = readCredentials(a.configDir);
     return { ...a, token: creds.token, expiresAt: creds.expiresAt };
-  });
+  }));
 
   // Pre-flight: detect expired tokens and offer re-auth
   // With --account, only the requested account matters; ignore the others.
@@ -638,7 +639,7 @@ async function cmdRun(claudeArgs) {
   );
 
   if (expiredPreFlight.length > 0 && !remoteAccess) {
-    const refreshed = await reauthExpiredAccounts(expiredPreFlight);
+    const refreshed = await timed('reauth-preflight', () => reauthExpiredAccounts(expiredPreFlight));
     if (refreshed.length > 0) {
       // Re-read credentials for refreshed accounts
       accountsWithCreds = accounts.map(a => {
@@ -674,14 +675,14 @@ async function cmdRun(claudeArgs) {
   } else {
     // Multiple accounts — check usage and pick best
     console.error('[claude-nonstop] Checking usage across accounts...');
-    const withUsage = await checkAllUsage(authenticated);
+    const withUsage = await timed('check-all-usage', () => checkAllUsage(authenticated));
 
     // Check if any authenticated accounts have API auth errors (expired or revoked)
     const apiExpired = withUsage.filter(a =>
       a.usage?.error === 'HTTP 401' || a.usage?.error === 'HTTP 403'
     );
     if (apiExpired.length > 0 && !remoteAccess) {
-      const refreshed = await reauthExpiredAccounts(apiExpired);
+      const refreshed = await timed('reauth-api-expired', () => reauthExpiredAccounts(apiExpired));
       if (refreshed.length > 0) {
         // Re-read credentials and re-check usage for refreshed accounts
         const updatedAccounts = accounts.map(a => {
@@ -713,6 +714,7 @@ async function cmdRun(claudeArgs) {
   }
 
   // Run with auto-switching
+  flushStartupTiming(`selected=${selectedAccount.name}`);
   await run(claudeArgs, selectedAccount, accounts, { remoteAccess, noAutoSwitch });
 }
 
@@ -786,10 +788,10 @@ async function cmdResume(resumeArgs) {
   }
 
   // Read credentials and pick best account (same as cmdRun)
-  let accountsWithCreds = accounts.map(a => {
+  let accountsWithCreds = await timed('read-credentials', () => accounts.map(a => {
     const creds = readCredentials(a.configDir);
     return { ...a, token: creds.token, expiresAt: creds.expiresAt };
-  });
+  }));
 
   // With --account, only the requested account matters; ignore the others.
   const expiredPreFlight = accountsWithCreds.filter(a =>
@@ -799,7 +801,7 @@ async function cmdResume(resumeArgs) {
   );
 
   if (expiredPreFlight.length > 0 && !remoteAccess) {
-    const refreshed = await reauthExpiredAccounts(expiredPreFlight);
+    const refreshed = await timed('reauth-preflight', () => reauthExpiredAccounts(expiredPreFlight));
     if (refreshed.length > 0) {
       accountsWithCreds = accounts.map(a => {
         const creds = readCredentials(a.configDir);
@@ -831,13 +833,13 @@ async function cmdResume(resumeArgs) {
     console.error(`[claude-nonstop] Using account "${selectedAccount.name}"`);
   } else {
     console.error('[claude-nonstop] Checking usage across accounts...');
-    const withUsage = await checkAllUsage(authenticated);
+    const withUsage = await timed('check-all-usage', () => checkAllUsage(authenticated));
 
     const apiExpired = withUsage.filter(a =>
       a.usage?.error === 'HTTP 401' || a.usage?.error === 'HTTP 403'
     );
     if (apiExpired.length > 0 && !remoteAccess) {
-      const refreshed = await reauthExpiredAccounts(apiExpired);
+      const refreshed = await timed('reauth-api-expired', () => reauthExpiredAccounts(apiExpired));
       if (refreshed.length > 0) {
         const updatedAccounts = accounts.map(a => {
           const creds = readCredentials(a.configDir);
@@ -875,6 +877,7 @@ async function cmdResume(resumeArgs) {
     }
   }
 
+  flushStartupTiming(`selected=${selectedAccount.name}`);
   await run(claudeArgs, selectedAccount, accounts, { remoteAccess, noAutoSwitch });
 }
 

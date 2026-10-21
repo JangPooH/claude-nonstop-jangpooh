@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRateLimitEvent, eventToRaw, getSetupToken, setSetupToken } from '../../../lib/probe.js';
+import { parseRateLimitEvent, eventToRaw, getSetupToken, setSetupToken, listEventTypes, parseResultEvent, formatProbeUsage } from '../../../lib/probe.js';
+import { redactSecrets } from '../../../lib/timing.js';
 
 // Shape captured from a real run (Claude Code stream-json, /login account, allowed state)
 const ALLOWED_INFO = {
@@ -96,6 +97,67 @@ describe('eventToRaw', () => {
 describe('getSetupToken', () => {
   it('returns null for a configDir that is not a registered account', () => {
     assert.equal(getSetupToken('/nonexistent/cn-test-dir'), null);
+  });
+});
+
+// Shape captured from a real run (stream-json final result event)
+const RESULT_EVENT = {
+  type: 'result',
+  subtype: 'success',
+  is_error: false,
+  usage: {
+    input_tokens: 2,
+    cache_creation_input_tokens: 561,
+    cache_read_input_tokens: 0,
+    output_tokens: 47,
+    cache_creation: { ephemeral_1h_input_tokens: 561, ephemeral_5m_input_tokens: 0 },
+  },
+  modelUsage: { 'claude-haiku-5-5': { inputTokens: 2 } },
+};
+
+describe('probe stream diagnostics', () => {
+  const stdout = [
+    JSON.stringify({ type: 'system', subtype: 'init' }),
+    'not json',
+    JSON.stringify({ type: 'assistant' }),
+    JSON.stringify(RESULT_EVENT),
+  ].join('\n');
+
+  it('lists event types in arrival order, skipping non-JSON lines', () => {
+    assert.equal(listEventTypes(stdout), 'system:init,assistant,result:success');
+  });
+
+  it('shows a probe that stalled after init as just system:init', () => {
+    assert.equal(listEventTypes(JSON.stringify({ type: 'system', subtype: 'init' })), 'system:init');
+    assert.equal(listEventTypes(''), '');
+  });
+
+  it('finds the result event, or null', () => {
+    assert.equal(parseResultEvent(stdout).subtype, 'success');
+    assert.equal(parseResultEvent(JSON.stringify({ type: 'system' })), null);
+  });
+
+  it('formats model and token breakdown with cache write split by TTL', () => {
+    assert.equal(
+      formatProbeUsage(RESULT_EVENT),
+      'model=claude-haiku-5-5 in=2 write=561(1h:561,5m:0) read=0 out=47',
+    );
+  });
+
+  it('returns empty text when the result has no usage', () => {
+    assert.equal(formatProbeUsage(null), '');
+    assert.equal(formatProbeUsage({ type: 'result' }), '');
+  });
+});
+
+describe('redactSecrets', () => {
+  it('masks OAuth and Slack tokens', () => {
+    assert.equal(redactSecrets('x sk-ant-oat01-AbC_d-1 y'), 'x sk-ant-*** y');
+    assert.equal(redactSecrets('xoxb-123-abc xapp-1-Zz'), 'xoxb-*** xapp-***');
+  });
+
+  it('leaves other text untouched', () => {
+    assert.equal(redactSecrets('probe: no rate_limit_event (exit null)'), 'probe: no rate_limit_event (exit null)');
   });
 });
 

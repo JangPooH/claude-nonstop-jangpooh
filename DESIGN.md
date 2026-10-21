@@ -271,7 +271,8 @@ If `tmux send-keys` fails (non-zero exit), the webhook posts a warning to the ch
 bin/claude-nonstop.js
   ├── lib/config.js
   ├── lib/keychain.js ─── lib/config.js (DEFAULT_CLAUDE_DIR)
-  ├── lib/usage.js
+  ├── lib/usage.js ─── lib/timing.js
+  ├── lib/timing.js ─── lib/config.js (startup-timing.log)
   ├── lib/scorer.js
   ├── lib/platform.js
   ├── lib/service.js ─── lib/platform.js
