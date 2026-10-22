@@ -1,21 +1,32 @@
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { pickBestAccount, pickByPriority, drainScore, PRIORITY_THRESHOLD } from '../../../lib/scorer.js';
+import { writeCache } from '../../../lib/cache.js';
+import { createTempDir, removeTempDir } from '../../helpers/temp-dir.js';
 
-const makeAccount = (name, sessionPercent, weeklyPercent, opts = {}) => ({
-  name,
-  configDir: `/tmp/profiles/${name}`,
-  token: 'token' in opts ? opts.token : 'sk-ant-oat01-valid',
-  priority: opts.priority ?? undefined,
-  usage: opts.error
-    ? { error: opts.error }
-    : {
-        sessionPercent,
-        weeklyPercent,
-        sessionRemainingTimePercent: opts.sessionRemaining ?? null,
-        weeklyRemainingTimePercent:  opts.weeklyRemaining  ?? null,
-      },
-});
+// pickBestAccount skips accounts without a fresh usage cache, so every test account gets one
+const cacheRoot = createTempDir('cn-scorer-');
+after(() => removeTempDir(cacheRoot));
+
+const makeAccount = (name, sessionPercent, weeklyPercent, opts = {}) => {
+  const configDir = path.join(cacheRoot, name);
+  writeCache(configDir, {}, Date.now());
+  return {
+    name,
+    configDir,
+    token: 'token' in opts ? opts.token : 'sk-ant-oat01-valid',
+    priority: opts.priority ?? undefined,
+    usage: opts.error
+      ? { error: opts.error }
+      : {
+          sessionPercent,
+          weeklyPercent,
+          sessionRemainingTimePercent: opts.sessionRemaining ?? null,
+          weeklyRemainingTimePercent:  opts.weeklyRemaining  ?? null,
+        },
+  };
+};
 
 describe('pickBestAccount', () => {
 
@@ -63,6 +74,13 @@ describe('pickBestAccount', () => {
     ];
     const result = pickBestAccount(accounts);
     assert.equal(result.account.name, 'ok');
+  });
+
+  it('skips an account whose usage cache is stale', () => {
+    const stale = makeAccount('stale', 0, 0);
+    writeCache(stale.configDir, {}, Date.now() - 10 * 60_000);
+    const result = pickBestAccount([stale, makeAccount('fresh', 50, 50)]);
+    assert.equal(result.account.name, 'fresh');
   });
 
   it('returns null when no candidates remain', () => {
@@ -124,10 +142,10 @@ describe('pickBestAccount', () => {
     assert.equal(result.account.name, 'zero');
   });
 
-  it('handles 100% utilization', () => {
+  it('excludes an account at 100% utilization', () => {
     const accounts = [makeAccount('full', 100, 100)];
     const result = pickBestAccount(accounts);
-    assert.equal(result.account.name, 'full');
+    assert.equal(result, null);
   });
 
   it('filters multiple invalid accounts correctly', () => {
@@ -213,7 +231,7 @@ describe('pickBestAccount with usePriority', () => {
   it('all exhausted — picks by priority then utilization', () => {
     const accounts = [
       makeAccount('a', 99, 99, { priority: 2 }),
-      makeAccount('b', 98, 100, { priority: 1 }),
+      makeAccount('b', 98, 99, { priority: 1 }),   // 99, not 100: 100% is excluded outright
     ];
     const result = pickBestAccount(accounts, undefined, { usePriority: true });
     // Both exhausted (>= 98%), priority 1 wins

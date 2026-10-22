@@ -54,8 +54,12 @@ describe('computeRemainingTimePercent', () => {
   const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
   const WEEKLY_WINDOW_MS  = 7 * 24 * 60 * 60 * 1000;
 
-  it('returns null when resetsAt is null', () => {
-    assert.equal(computeRemainingTimePercent(null, SESSION_WINDOW_MS), null);
+  it('estimates from the current hour when resetsAt is null', () => {
+    const hour = Date.UTC(2026, 9, 22, 10, 0, 0);
+    assert.equal(computeRemainingTimePercent(null, SESSION_WINDOW_MS, hour), 100);
+    // 30 minutes into the hour, 4.5h of the 5h window is left
+    const result = computeRemainingTimePercent(null, SESSION_WINDOW_MS, hour + 30 * 60_000);
+    assert.ok(Math.abs(result - 90) < 0.01, `expected ~90, got ${result}`);
   });
 
   it('returns ~50% when reset is exactly half the session window away', () => {
@@ -96,8 +100,9 @@ describe('checkUsage', () => {
     globalThis.fetch = async () => ({
       ok: true,
       json: async () => ({
-        five_hour: { utilization: 0.42, resets_at: '2026-02-15T12:00:00Z' },
-        seven_day: { utilization: 0.75, resets_at: '2026-02-20T00:00:00Z' },
+        // The nested format reports utilization as a 0-100 percentage already
+        five_hour: { utilization: 42, resets_at: '2026-02-15T12:00:00Z' },
+        seven_day: { utilization: 75, resets_at: '2026-02-20T00:00:00Z' },
       }),
     });
 
@@ -238,8 +243,8 @@ describe('checkAllUsage', () => {
   it('checks all accounts in parallel and preserves order', async () => {
     // Use token to deterministically map to different data (avoids race on shared counter)
     const usageByToken = {
-      'sk-ant-oat01-a': { five_hour: { utilization: 0.20 }, seven_day: { utilization: 0.10 } },
-      'sk-ant-oat01-b': { five_hour: { utilization: 0.60 }, seven_day: { utilization: 0.40 } },
+      'sk-ant-oat01-a': { five_hour: { utilization: 20 }, seven_day: { utilization: 10 } },
+      'sk-ant-oat01-b': { five_hour: { utilization: 60 }, seven_day: { utilization: 40 } },
     };
 
     globalThis.fetch = async (url, opts) => {

@@ -223,6 +223,8 @@ describe('ensureDefaultAccount', () => {
   });
 
   it('default account has configDir set to DEFAULT_CLAUDE_DIR', () => {
+    // Start empty: a machine whose default account was renamed would not be called 'default'
+    saveConfig({ accounts: [] });
     ensureDefaultAccount();
     const config = loadConfig();
     const defaultAcct = config.accounts.find(a => a.configDir === DEFAULT_CLAUDE_DIR);
