@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { RATE_LIMIT_PATTERN, stripAnsi, findEarliestReset, formatDuration, sleep, EXHAUSTION_THRESHOLD, MAX_SLEEP_MS, isRateLimitConfirmed } from '../../../lib/runner.js';
+import { RATE_LIMIT_PATTERN, stripAnsi, findEarliestReset, formatDuration, sleep, EXHAUSTION_THRESHOLD, MAX_SLEEP_MS, isRateLimitConfirmed, pickWaitMs, RESET_MARGIN_MS, RESET_LAG_RETRY_MS } from '../../../lib/runner.js';
 import { effectiveUtilization } from '../../../lib/scorer.js';
 
 describe('RATE_LIMIT_PATTERN', () => {
@@ -452,5 +452,43 @@ describe('isRateLimitConfirmed', () => {
   it('trusts the banner when usage is missing or errored', () => {
     assert.equal(isRateLimitConfirmed(null), true);
     assert.equal(isRateLimitConfirmed({ sessionPercent: 0, weeklyPercent: 0, raw: null, error: 'timeout' }), true);
+  });
+});
+
+describe('pickWaitMs', () => {
+  const NOW = Date.parse('2026-10-22T11:00:00.000Z');
+  const at = (ms) => new Date(NOW + ms).toISOString();
+  const usage = (sessionPercent, sessionIn, weeklyPercent, weeklyIn) => ({
+    sessionPercent, weeklyPercent,
+    sessionResetsAt: sessionIn == null ? null : at(sessionIn),
+    weeklyResetsAt: weeklyIn == null ? null : at(weeklyIn),
+    error: null,
+  });
+  const H = 3_600_000;
+
+  it('waits for the blocked window only, plus the margin', () => {
+    assert.equal(pickWaitMs(usage(100, 2 * H, 61, 1 * H), NOW), 2 * H + RESET_MARGIN_MS);
+  });
+
+  it('does not fall through to the weekly reset when the session reset has passed', () => {
+    assert.equal(pickWaitMs(usage(100, -1000, 61, 3 * H), NOW), RESET_LAG_RETRY_MS);
+  });
+
+  it('waits for the later reset when both windows are blocked', () => {
+    assert.equal(pickWaitMs(usage(100, 1 * H, 100, 5 * H), NOW), 5 * H + RESET_MARGIN_MS);
+  });
+
+  it('ignores a passed reset of one blocked window and waits for the other', () => {
+    assert.equal(pickWaitMs(usage(100, -1000, 100, 2 * H), NOW), 2 * H + RESET_MARGIN_MS);
+  });
+
+  it('uses the earliest reset when no window is known to be blocked', () => {
+    assert.equal(pickWaitMs(usage(null, 2 * H, null, 1 * H), NOW), 1 * H + RESET_MARGIN_MS);
+  });
+
+  it('returns 0 without usable data', () => {
+    assert.equal(pickWaitMs(null, NOW), 0);
+    assert.equal(pickWaitMs({ error: 'HTTP 401' }, NOW), 0);
+    assert.equal(pickWaitMs(usage(null, null, null, null), NOW), 0);
   });
 });

@@ -2,8 +2,8 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { normalizePercent, computeRemainingTimePercent, checkUsage, readProfile, checkAllUsage } from '../../../lib/usage.js';
-import { writeCache } from '../../../lib/cache.js';
+import { normalizePercent, computeRemainingTimePercent, checkUsage, readProfile, checkAllUsage, waitForInflightFetch } from '../../../lib/usage.js';
+import { writeCache, updateApiCallTimestamp } from '../../../lib/cache.js';
 import { createTempDir, removeTempDir } from '../../helpers/temp-dir.js';
 
 describe('normalizePercent', () => {
@@ -267,5 +267,59 @@ describe('checkAllUsage', () => {
     assert.equal(results[1].usage.weeklyPercent, 40);
     assert.equal(results[0].usage.error, null);
     assert.equal(results[1].usage.error, null);
+  });
+});
+
+describe('checkUsage while another call is fetching', () => {
+  let dir;
+  const raw = (utilization) => ({
+    source: 'probe',
+    five_hour: { utilization, resets_at: '2026-10-22T16:50:00.000Z' },
+    seven_day: { utilization: 10, resets_at: '2026-10-25T07:00:00.000Z' },
+  });
+
+  beforeEach(() => { dir = createTempDir('cn-inflight-'); });
+  afterEach(() => { removeTempDir(dir); });
+
+  it('waits for the in-flight result instead of serving the stale cache', async () => {
+    const now = Date.now();
+    writeCache(dir, raw(100), now - 11 * 60_000);
+    updateApiCallTimestamp(dir, now);
+    setTimeout(() => writeCache(dir, raw(1), now), 100);
+
+    const result = await checkUsage('unused', dir, { maxAgeMs: 30_000 });
+    assert.equal(result.sessionPercent, 1);
+  });
+
+  it('still serves a cache that is within maxAge without waiting', async () => {
+    const now = Date.now();
+    writeCache(dir, raw(42), now - 5_000);
+    updateApiCallTimestamp(dir, now);
+
+    const result = await checkUsage('unused', dir, { maxAgeMs: 30_000 });
+    assert.equal(result.sessionPercent, 42);
+  });
+});
+
+describe('waitForInflightFetch', () => {
+  let dir;
+
+  beforeEach(() => { dir = createTempDir('cn-inflight-wait-'); });
+  afterEach(() => { removeTempDir(dir); });
+
+  it('returns null once the timeout passes with no new cache', async () => {
+    const startedAt = Date.now();
+    writeCache(dir, { five_hour: { utilization: 100 } }, startedAt - 60_000);
+
+    const result = await waitForInflightFetch(dir, startedAt, { timeoutMs: 150, pollMs: 20 });
+    assert.equal(result, null);
+  });
+
+  it('ignores a cache written before the fetch started', async () => {
+    const startedAt = Date.now();
+    writeCache(dir, { five_hour: { utilization: 100 } }, startedAt - 1);
+
+    const result = await waitForInflightFetch(dir, startedAt, { timeoutMs: 150, pollMs: 20 });
+    assert.equal(result, null);
   });
 });
