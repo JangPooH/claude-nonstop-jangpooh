@@ -17,6 +17,20 @@ const ALLOWED_INFO = {
   },
 };
 
+// Shape captured from a real run (five_hour limit hit; the probe exited 1 with a 429 result)
+const BLOCKED_INFO = {
+  status: 'rejected',
+  resetsAt: 1792669800,
+  rateLimitType: 'five_hour',
+  overageStatus: 'rejected',
+  overageDisabledReason: 'out_of_credits',
+  isUsingOverage: false,
+  unifiedWindows: {
+    five_hour: { utilization: 1, resetsAt: 1792669800 },
+    seven_day: { utilization: 0.61, resetsAt: 1792681200 },
+  },
+};
+
 const eventLine = (info) => JSON.stringify({ type: 'rate_limit_event', rate_limit_info: info });
 
 describe('parseRateLimitEvent', () => {
@@ -85,6 +99,18 @@ describe('eventToRaw', () => {
       resetsAt: 1792681200,
     });
     assert.deepEqual(raw.seven_day, { utilization: 100, resets_at: '2026-10-22T15:00:00.000Z' });
+  });
+
+  it('reads both windows from a real blocked event', () => {
+    const stdout = [
+      JSON.stringify({ type: 'system', subtype: 'init' }),
+      eventLine(BLOCKED_INFO),
+      JSON.stringify({ type: 'assistant' }),
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: true, api_error_status: 429 }),
+    ].join('\n');
+    const raw = eventToRaw(parseRateLimitEvent(stdout));
+    assert.deepEqual(raw.five_hour, { utilization: 100, resets_at: '2026-10-22T11:50:00.000Z' });
+    assert.deepEqual(raw.seven_day, { utilization: 61, resets_at: '2026-10-22T15:00:00.000Z' });
   });
 
   it('leaves an unreported window null instead of 0', () => {
