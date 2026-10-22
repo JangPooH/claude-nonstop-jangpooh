@@ -17,10 +17,10 @@ import { checkAllUsage, checkUsage, readProfile } from '../lib/usage.js';
 import { pickBestAccount, pickByPriority } from '../lib/scorer.js';
 import { run } from '../lib/runner.js';
 import { reauthAccount, reauthExpiredAccounts, silentRefresh } from '../lib/reauth.js';
-import { getSetupToken, setSetupToken } from '../lib/probe.js';
+import { getSetupToken, setSetupToken, checkSetupTokenExpiry } from '../lib/probe.js';
 import { timed, flushStartupTiming } from '../lib/timing.js';
 import { isMacOS } from '../lib/platform.js';
-import { makeBar, formatResetTime, formatUserInfo, formatExtraCredit, getMonthlyResetTime, colorizePercent } from '../lib/format.js';
+import { makeBar, formatResetTime, formatUserInfo, formatExtraCredit, getMonthlyResetTime, colorizePercent, formatSetupTokenExpiry } from '../lib/format.js';
 import { computeRemainingTimePercent } from '../lib/usage.js';
 import { installService, uninstallService, restartService, getServiceStatus, isServiceInstalled, LOG_PATH } from '../lib/service.js';
 
@@ -447,6 +447,14 @@ async function cmdList() {
   }
 }
 
+function warnSetupTokenExpiry(accounts) {
+  for (const a of accounts) {
+    const expiry = checkSetupTokenExpiry(a.configDir);
+    if (!expiry?.warn) continue;
+    console.error(`[claude-nonstop] WARNING: "${a.name}" ${formatSetupTokenExpiry(expiry)}. Renew: claude setup-token, then claude-nonstop -a ${a.name} --set-token`);
+  }
+}
+
 async function cmdStatus(args = []) {
   const showRaw = args.includes('--raw');
   const forceRefresh = args.includes('-f') || args.includes('--force');
@@ -559,6 +567,9 @@ async function cmdStatus(args = []) {
           console.log(`    Raw API: ${JSON.stringify(account.usage.raw)}`);
         }
       }
+
+      const expiry = checkSetupTokenExpiry(account.configDir);
+      if (expiry?.warn) console.log(`    WARNING: ${formatSetupTokenExpiry(expiry)}`);
       console.log('');
     }
   }
@@ -648,6 +659,8 @@ async function cmdRun(claudeArgs) {
       });
     }
   }
+
+  await timed('setup-token-expiry', () => warnSetupTokenExpiry(accountsWithCreds));
 
   const authenticated = accountsWithCreds.filter(a => a.token);
 
@@ -809,6 +822,8 @@ async function cmdResume(resumeArgs) {
       });
     }
   }
+
+  await timed('setup-token-expiry', () => warnSetupTokenExpiry(accountsWithCreds));
 
   const authenticated = accountsWithCreds.filter(a => a.token);
   if (authenticated.length === 0) {

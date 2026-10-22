@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRateLimitEvent, eventToRaw, getSetupToken, setSetupToken, listEventTypes, parseResultEvent, formatProbeUsage } from '../../../lib/probe.js';
+import { parseRateLimitEvent, eventToRaw, getSetupToken, setSetupToken, listEventTypes, parseResultEvent, formatProbeUsage, parseKeychainMdat, setupTokenExpiry } from '../../../lib/probe.js';
 import { redactSecrets } from '../../../lib/timing.js';
 
 // Shape captured from a real run (Claude Code stream-json, /login account, allowed state)
@@ -117,6 +117,57 @@ describe('eventToRaw', () => {
     const raw = eventToRaw({ status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1792419000 });
     assert.equal(raw.five_hour.utilization, 100);
     assert.equal(raw.seven_day, null);
+  });
+});
+
+// Attributes as `security find-generic-password` prints them (no -w/-g, so no secret)
+const KEYCHAIN_ATTRS = `keychain: "/Users/x/Library/Keychains/login.keychain-db"
+class: "genp"
+attributes:
+    "acct"<blob>="demo"
+    "cdat"<timedate>=0x32303236313031393135323134345A00  "20261019152144Z\\000"
+    "mdat"<timedate>=0x32303236313031393136303831325A00  "20261019160812Z\\000"
+    "svce"<blob>="cc-token-demo"
+`;
+
+describe('parseKeychainMdat', () => {
+  it('reads the last-modified time, not the creation time', () => {
+    assert.equal(parseKeychainMdat(KEYCHAIN_ATTRS).toISOString(), '2026-10-19T16:08:12.000Z');
+  });
+
+  it('returns null when there is no mdat', () => {
+    assert.equal(parseKeychainMdat('"cdat"<timedate>=0x00  "20261019152144Z\\000"'), null);
+    assert.equal(parseKeychainMdat(''), null);
+  });
+});
+
+describe('setupTokenExpiry', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const registeredAt = new Date('2026-10-19T16:08:12.000Z');
+  const expiresAt = registeredAt.getTime() + 364 * DAY;
+
+  it('expires 364 days after registration', () => {
+    const result = setupTokenExpiry(registeredAt, registeredAt.getTime());
+    assert.equal(result.expiresAt.toISOString(), '2027-10-18T16:08:12.000Z');
+    assert.equal(result.daysLeft, 364);
+    assert.equal(result.warn, false);
+  });
+
+  it('does not warn until 7 days are left', () => {
+    assert.equal(setupTokenExpiry(registeredAt, expiresAt - 8 * DAY).warn, false);
+    assert.equal(setupTokenExpiry(registeredAt, expiresAt - 7 * DAY - 1).warn, false);
+    assert.equal(setupTokenExpiry(registeredAt, expiresAt - 7 * DAY).warn, true);
+  });
+
+  it('counts a partial day as a whole day left', () => {
+    assert.equal(setupTokenExpiry(registeredAt, expiresAt - 6.5 * DAY).daysLeft, 7);
+  });
+
+  it('keeps warning after expiry', () => {
+    const result = setupTokenExpiry(registeredAt, expiresAt + 3 * DAY);
+    assert.equal(result.daysLeft, -3);
+    assert.equal(result.warn, true);
+    assert.ok(setupTokenExpiry(registeredAt, expiresAt + 0.5 * DAY).daysLeft === 0);
   });
 });
 

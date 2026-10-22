@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { shouldRefreshCache, writeCache, CACHE_INTERVAL_MS } from '../../../lib/cache.js';
+import { shouldRefreshCache, writeCache, CACHE_INTERVAL_MS, readSetupTokenMeta, writeSetupTokenMeta, clearSetupTokenMeta } from '../../../lib/cache.js';
 import { checkUsage } from '../../../lib/usage.js';
 
 describe('shouldRefreshCache intervalMs', () => {
@@ -38,6 +38,45 @@ describe('checkUsage maxAgeMs', () => {
       assert.equal(usage.error, null);
       assert.equal(usage.sessionPercent, 42);
       assert.equal(usage.weeklyPercent, 7);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('setup-token meta cache', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const registeredAt = '2026-10-19T16:08:12.000Z';
+
+  it('returns what was written while it is under a day old', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nonstop-meta-'));
+    try {
+      writeSetupTokenMeta(dir, registeredAt, 1_000_000);
+      assert.deepEqual(readSetupTokenMeta(dir, 1_000_000 + DAY - 1), { registeredAt, checkedAt: 1_000_000 });
+      assert.equal(readSetupTokenMeta(dir, 1_000_000 + DAY), null);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null when the file is missing or unparsable', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nonstop-meta-'));
+    try {
+      assert.equal(readSetupTokenMeta(dir), null);
+      fs.writeFileSync(path.join(dir, 'setup_token_meta.json'), 'not json');
+      assert.equal(readSetupTokenMeta(dir), null);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is gone after clearSetupTokenMeta, and clearing twice is harmless', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nonstop-meta-'));
+    try {
+      writeSetupTokenMeta(dir, registeredAt);
+      clearSetupTokenMeta(dir);
+      assert.equal(readSetupTokenMeta(dir), null);
+      clearSetupTokenMeta(dir);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
