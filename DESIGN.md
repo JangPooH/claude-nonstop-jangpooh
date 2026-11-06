@@ -274,6 +274,7 @@ bin/claude-nonstop.js
   ├── lib/usage.js ─── lib/timing.js
   ├── lib/timing.js ─── lib/config.js (startup-timing.log)
   ├── lib/scorer.js
+  ├── lib/selection-log.js ─── lib/scorer.js, lib/timing.js (account-selection.log)
   ├── lib/platform.js
   ├── lib/service.js ─── lib/platform.js
   ├── lib/session.js (dynamic import, resume command only)
@@ -281,6 +282,7 @@ bin/claude-nonstop.js
   │     ├── lib/keychain.js
   │     ├── lib/usage.js
   │     ├── lib/scorer.js
+  │     ├── lib/selection-log.js
   │     ├── lib/session.js
   │     ├── lib/reauth.js ─── lib/keychain.js
   │     ├── lib/fake-git.js

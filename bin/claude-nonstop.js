@@ -19,6 +19,7 @@ import { run } from '../lib/runner.js';
 import { reauthAccount, reauthExpiredAccounts, silentRefresh } from '../lib/reauth.js';
 import { getSetupToken, setSetupToken, checkSetupTokenExpiry } from '../lib/probe.js';
 import { timed, flushStartupTiming } from '../lib/timing.js';
+import { logSelection } from '../lib/selection-log.js';
 import { isMacOS } from '../lib/platform.js';
 import { makeBar, formatResetTime, formatUserInfo, formatExtraCredit, getMonthlyResetTime, colorizePercent, formatSetupTokenExpiry } from '../lib/format.js';
 import { computeRemainingTimePercent } from '../lib/usage.js';
@@ -671,6 +672,8 @@ async function cmdRun(claudeArgs) {
 
   // Check usage and pick best account
   let selectedAccount;
+  let scoredAccounts = [];
+  let scoredBest = null;
 
   if (requestedAccount) {
     // Explicit --account flag — use it directly, skip usage check
@@ -715,6 +718,8 @@ async function cmdRun(claudeArgs) {
     // Only use priority sorting when at least one account has a priority set
     const hasPriorities = withUsage.some(a => a.priority != null);
     const best = pickBestAccount(withUsage, undefined, { usePriority: hasPriorities });
+    scoredAccounts = withUsage;
+    scoredBest = best;
 
     if (best) {
       selectedAccount = best.account;
@@ -725,6 +730,16 @@ async function cmdRun(claudeArgs) {
       console.error(`[claude-nonstop] Defaulting to "${selectedAccount.name}"`);
     }
   }
+
+  logSelection({
+    command: 'run',
+    args: claudeArgs,
+    requested: requestedAccount,
+    via: requestedAccount ? 'requested' : authenticated.length === 1 ? 'single' : scoredBest ? 'scored' : 'fallback-first',
+    accounts: scoredAccounts,
+    selected: selectedAccount.name,
+    reason: scoredBest?.reason ?? null,
+  });
 
   // Run with auto-switching
   flushStartupTiming(`selected=${selectedAccount.name}`);
@@ -833,6 +848,8 @@ async function cmdResume(resumeArgs) {
 
   // Pick best account
   let selectedAccount;
+  let scoredAccounts = [];
+  let scoredBest = null;
 
   if (requestedAccount) {
     // Explicit --account flag — use it directly, skip usage check
@@ -871,6 +888,8 @@ async function cmdResume(resumeArgs) {
 
     const hasPriorities = withUsage.some(a => a.priority != null);
     const best = pickBestAccount(withUsage, undefined, { usePriority: hasPriorities });
+    scoredAccounts = withUsage;
+    scoredBest = best;
 
     if (best) {
       selectedAccount = best.account;
@@ -891,6 +910,20 @@ async function cmdResume(resumeArgs) {
       selectedAccount = found.account;
     }
   }
+
+  // Logged after migration: a failed migration swaps selectedAccount back to the source account
+  logSelection({
+    command: 'resume',
+    args: claudeArgs,
+    requested: requestedAccount,
+    via: requestedAccount ? 'requested'
+      : authenticated.length === 1 ? 'single'
+      : !scoredBest ? 'fallback-first'
+      : selectedAccount.name === scoredBest.account.name ? 'scored' : 'migration-fallback',
+    accounts: scoredAccounts,
+    selected: selectedAccount.name,
+    reason: scoredBest?.reason ?? null,
+  });
 
   flushStartupTiming(`selected=${selectedAccount.name}`);
   await run(claudeArgs, selectedAccount, accounts, { remoteAccess, noAutoSwitch });
