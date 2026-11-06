@@ -303,7 +303,7 @@ cd ~/code  # or user's preferred directory
 git clone https://github.com/rchaz/claude-nonstop.git
 cd claude-nonstop
 
-npm install -g "$(npm pack)"
+./install_global.sh  # pins --prefix ~/.local; plain npm -g can land behind PATH
 claude-nonstop help  # Verify
 ```
 
@@ -445,7 +445,7 @@ This should:
 
 ### What you CAN automate
 
-- Installing claude-nonstop (`git clone`, `npm install -g "$(npm pack)"`)
+- Installing claude-nonstop (`git clone`, `./install_global.sh`)
 - **Adding accounts** (`claude-nonstop add <name>`) — uses `claude auth login` which opens the browser and waits. The `CLAUDECODE` env var is stripped automatically so it works from inside a Claude Code session.
 - Running `claude-nonstop setup --bot-token <tok> --app-token <tok> --invite-user-id <uid>` (after user provides tokens and user ID)
 - Running `claude-nonstop setup --from-env` (after setting env vars with user-provided tokens and user ID)
