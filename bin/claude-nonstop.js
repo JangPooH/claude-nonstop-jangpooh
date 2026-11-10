@@ -1854,7 +1854,7 @@ Options:
   -a, --account <name>    Use a specific account
   -a <name> --set-token   Store the account's \`claude setup-token\` token in the Keychain
   --remote-access         Run in tmux with Slack channels
-  --no-auto-switch        Disable rate limit detection and auto account switching
+  --no-auto-switch        Start with SWITCH-BYPASS=1 (rate limit detection off; toggle to 0 to re-enable)
 
 All other arguments are passed through to \`claude\`.
 Run \`setup --help\`, \`webhook\`, or \`hooks\` for subcommand details.
