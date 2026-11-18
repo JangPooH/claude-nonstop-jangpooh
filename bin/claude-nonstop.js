@@ -15,7 +15,7 @@ import { addAccount, removeAccount, getAccounts, ensureDefaultAccount, validateA
 import { readCredentials, isTokenExpired, deleteKeychainEntry } from '../lib/keychain.js';
 import { checkAllUsage, checkUsage, readProfile } from '../lib/usage.js';
 import { pickBestAccount, pickByPriority } from '../lib/scorer.js';
-import { run } from '../lib/runner.js';
+import { run, extractResumeSessionId } from '../lib/runner.js';
 import { reauthAccount, reauthExpiredAccounts, silentRefresh } from '../lib/reauth.js';
 import { getSetupToken, setSetupToken, checkSetupTokenExpiry } from '../lib/probe.js';
 import { timed, flushStartupTiming } from '../lib/timing.js';
@@ -82,6 +82,10 @@ switch (command) {
 
   case 'resume-info':
     await cmdResumeInfo(args.slice(1));
+    break;
+
+  case 'live-sessions':
+    await cmdLiveSessions();
     break;
 
   case 'use':
@@ -584,6 +588,19 @@ async function cmdStatus(args = []) {
   }
 }
 
+// Resuming a session another process still holds makes two processes append to one transcript.
+// --fork-session writes a new session, so it passes. Only entry points call this: the runner's own
+// account-switch relaunch resumes the same session on purpose.
+async function abortIfSessionLive(accounts, sessionId, args) {
+  if (args.includes('--fork-session')) return;
+  const { findLiveHolder } = await import('../lib/session.js');
+  const holder = findLiveHolder(accounts, sessionId);
+  if (!holder) return;
+  console.error(`Error: Session "${sessionId}" is already open in account "${holder.account.name}" (pid ${holder.pid}, cwd ${holder.cwd}).`);
+  console.error('Two processes would write the same transcript. Close that one first, or add --fork-session.');
+  process.exit(1);
+}
+
 async function cmdRun(claudeArgs) {
   // Extract --remote-access flag (consume it, don't pass to claude)
   const remoteAccessIdx = claudeArgs.indexOf('--remote-access');
@@ -635,6 +652,9 @@ async function cmdRun(claudeArgs) {
     console.error('No accounts registered. Run "claude-nonstop add <name>" first.');
     process.exit(1);
   }
+
+  const resumeId = extractResumeSessionId(claudeArgs);
+  if (resumeId) await abortIfSessionLive(accounts, resumeId, claudeArgs);
 
   // Read credentials for all accounts
   let accountsWithCreds = await timed('read-credentials', () => accounts.map(a => {
@@ -801,6 +821,7 @@ async function cmdResume(resumeArgs) {
   }
 
   const sessionId = sessionIdArg || found.sessionId;
+  await abortIfSessionLive(accounts, sessionId, resumeArgs);
   console.error(`[claude-nonstop] Found session ${sessionId} in account "${found.account.name}"`);
 
   // Build claude args. Forward any flags the caller passed alongside the
@@ -972,6 +993,16 @@ async function cmdResumeInfo(resumeArgs) {
   const modelShorthand = modelMatch ? modelMatch[0].toLowerCase() : '';
 
   console.log(`${sessionId}\t${actualAccount.name}\t${modelShorthand}`);
+}
+
+/**
+ * Print every live interactive session across accounts as a JSON array, no launch.
+ * Single source of "which sessions are open" for shell/script integration (e.g. cldl).
+ */
+async function cmdLiveSessions() {
+  const { listLiveSessions } = await import('../lib/session.js');
+  const live = listLiveSessions(getAccounts()).map(({ account, ...rest }) => ({ ...rest, account: account.name }));
+  console.log(JSON.stringify(live));
 }
 
 // ─── Use & Priority Commands ────────────────────────────────────────────────
@@ -1835,6 +1866,7 @@ Commands:
   reauth               Re-authenticate expired accounts
   resume [id]          Resume most recent session, or a specific one by ID
   resume-info [id]     Print "sessionId<TAB>account<TAB>model" for resume, no launch (shell integration)
+  live-sessions        Print live interactive sessions of all accounts as JSON, no launch (shell integration)
   init <bash|zsh>      Shell integration (add to ~/.bashrc or ~/.zshrc):
                          eval "$(claude-nonstop init bash)"
   use [name|flag]      Switch active account for current shell (Agent SDK, etc.)

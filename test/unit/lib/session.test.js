@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, writeFileSync, utimesSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
 import { createTempDir, removeTempDir } from '../../helpers/temp-dir.js';
@@ -14,6 +15,8 @@ import {
   migrateSessionByHash,
   validateSessionId,
   getLiveSessionId,
+  findLiveHolder,
+  listLiveSessions,
 } from '../../../lib/session.js';
 
 // Valid UUIDs for tests
@@ -395,5 +398,75 @@ describe('migrateSessionByHash', () => {
     const fromDir = join(tempDir, 'from');
     const toDir = join(tempDir, 'to');
     assert.throws(() => migrateSessionByHash(fromDir, toDir, '-x', '../../../etc'), /Invalid session ID/);
+  });
+});
+
+describe('findLiveHolder', () => {
+  let tempDir;
+  let accounts;
+  const psStart = pid => execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], {
+    encoding: 'utf8',
+    env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' },
+  }).trim();
+  const writeEntry = (pid, overrides = {}) => writeFileSync(
+    join(tempDir, 'sessions', `${pid}.json`),
+    JSON.stringify({ pid, sessionId: UUID1, kind: 'interactive', procStart: psStart(process.pid), cwd: '/tmp/x', ...overrides }),
+  );
+
+  beforeEach(() => {
+    tempDir = createTempDir();
+    mkdirSync(join(tempDir, 'sessions'), { recursive: true });
+    accounts = [{ name: 'a', configDir: tempDir }];
+  });
+
+  afterEach(() => {
+    removeTempDir(tempDir);
+  });
+
+  it('returns the holder of a live interactive entry', () => {
+    writeEntry(process.pid);
+    const holder = findLiveHolder(accounts, UUID1);
+    assert.equal(holder.pid, process.pid);
+    assert.equal(holder.account.name, 'a');
+    assert.equal(holder.cwd, '/tmp/x');
+  });
+
+  it('ignores an entry whose procStart differs (reused pid)', () => {
+    writeEntry(process.pid, { procStart: 'Mon Jan  1 00:00:00 2001' });
+    assert.equal(findLiveHolder(accounts, UUID1), null);
+  });
+
+  it('ignores a dead pid', () => {
+    writeEntry(2147483646);
+    assert.equal(findLiveHolder(accounts, UUID1), null);
+  });
+
+  it('ignores non-interactive entries and other sessions', () => {
+    writeEntry(process.pid, { kind: 'bg' });
+    assert.equal(findLiveHolder(accounts, UUID1), null);
+    writeEntry(process.pid, { sessionId: UUID2 });
+    assert.equal(findLiveHolder(accounts, UUID1), null);
+  });
+
+  it('skips accounts without a sessions dir', () => {
+    assert.equal(findLiveHolder([{ name: 'x', configDir: join(tempDir, 'none') }], UUID1), null);
+  });
+
+  it('lists live sessions of all accounts, filtered by session when given', () => {
+    const other = createTempDir();
+    try {
+      mkdirSync(join(other, 'sessions'), { recursive: true });
+      writeEntry(process.pid, { startedAt: 111 });
+      writeFileSync(
+        join(other, 'sessions', `${process.ppid}.json`),
+        JSON.stringify({ pid: process.ppid, sessionId: UUID2, kind: 'interactive', procStart: psStart(process.ppid), cwd: '/tmp/y', startedAt: 222 }),
+      );
+      const both = [...accounts, { name: 'b', configDir: other }];
+      const all = listLiveSessions(both);
+      assert.deepEqual(all.map(s => [s.sessionId, s.account.name, s.startedAt]).sort(), [[UUID1, 'a', 111], [UUID2, 'b', 222]]);
+      assert.deepEqual(listLiveSessions(both, UUID2).map(s => s.pid), [process.ppid]);
+    } finally {
+      removeTempDir(other);
+    }
   });
 });
